@@ -80,6 +80,7 @@ import com.health.openscale.core.bluetooth.scales.RunstarR6Handler
 import com.health.openscale.core.bluetooth.scales.RyFitHandler
 import com.health.openscale.core.bluetooth.scales.SanitasSbf72Handler
 import com.health.openscale.core.bluetooth.scales.ScaleDeviceHandler
+import com.health.openscale.core.bluetooth.scales.AnkoHandler
 import com.health.openscale.core.bluetooth.scales.ScaleupHandler
 import com.health.openscale.core.bluetooth.scales.SenssunHandler
 import com.health.openscale.core.bluetooth.scales.SinocareHandler
@@ -369,6 +370,10 @@ object ScaleCatalog {
         ) claimedBy EtekcityFit8SHandler::class.java,
         advertisement(manufacturerData = listOf(0x1DD0 to ByteArray(9)))
             claimedBy ScaleupHandler::class.java,
+        advertisement(
+            name = "IF_B7",
+            manufacturerData = listOf(AnkoHandler.MANUFACTURER_ID to hex("020311 C0FFEE123456 02 131F 0086 A1 07 62")),
+        ) claimedBy AnkoHandler::class.java,
         advertisement(
             name = "EL1",
             services = listOf(uuid16(0xF0A0)),
