@@ -372,7 +372,7 @@ object ScaleCatalog {
             claimedBy ScaleupHandler::class.java,
         advertisement(
             name = "IF_B7",
-            manufacturerData = listOf(AnkoHandler.COMPANY_ID to hex("020311 C0FFEE123456 02 131F 0086 A1 07 62")),
+            manufacturerData = listOf(AnkoHandler.MANUFACTURER_ID to hex("020311 C0FFEE123456 02 131F 0086 A1 07 62")),
         ) claimedBy AnkoHandler::class.java,
         advertisement(
             name = "EL1",

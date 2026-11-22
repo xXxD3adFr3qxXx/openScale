@@ -21,119 +21,120 @@ import android.bluetooth.le.ScanResult
 import com.health.openscale.core.bluetooth.data.ScaleMeasurement
 import com.health.openscale.core.bluetooth.data.ScaleUser
 import com.health.openscale.core.bluetooth.libs.StandardImpedanceLib
-import com.health.openscale.core.data.Kcal
 import com.health.openscale.core.data.Kg
 import com.health.openscale.core.data.MeasurementType
 import com.health.openscale.core.data.Ohm
 import com.health.openscale.core.data.Percent
 import com.health.openscale.core.service.ScannedDeviceInfo
-import com.health.openscale.core.utils.LogManager
 import java.util.Date
-import java.util.UUID
 
 /**
- * Anko Bluetooth Body Analysis Scale (Kmart 43468829, model iF1012D, advertises as "IF_B7",
- * vendor app MovingLife).
+ * Anko Bluetooth Body Analysis Scale (Kmart 43468829, model iF1012D), advertising as "IF_B7".
  *
- * Broadcast-only: every advertisement is ADV_NONCONN_IND. Manufacturer data, company id
- * 0x0100 (raw `00 01`), then 17 bytes as `ScanRecord` hands them over:
- *   [0..2]   02 03 11      constant header
- *   [3..8]   scale MAC
- *   [9]      02            constant
- *   [10..11] weight, u16 BE, 0.01 kg
- *   [12..13] resistance, u16 BE, raw; 0 while weighing and in shoes, ~2000 in socks
- *   [14]     0x01 live, 0xA1 final
- *   [15]     packet counter
- *   [16]     checksum = sum([9..15]) & 0xFF
+ * The scale never accepts a connection; it sends everything in non-connectable advertisements
+ * under manufacturer id 0x0100. Frame after the company id:
  *
- * Decoded from an HCI snoop: final frames 48.95 kg and 43.10 kg matched the scale display.
- * Operated by [BroadcastScaleAdapter]; GATT hooks are intentional no-ops.
+ *   0-2    02 03 11 (fixed)
+ *   3-8    scale MAC
+ *   9      02 (resolution, 0.01 kg)
+ *   10-11  weight, big endian, kg/100
+ *   12-13  resistance, big endian, raw (0 while weighing or in shoes, ~2000 in socks)
+ *   14     01 while weighing, A1 once the weight is locked
+ *   15     counter
+ *   16     checksum, sum of bytes 9-15
  */
 class AnkoHandler : ScaleDeviceHandler() {
 
-    companion object {
-        const val COMPANY_ID = 0x0100
-        private const val FRAME_LEN = 17
-        private const val FLAG_FINAL = 0xA1
-        // shortcut: raw × 4 is a guess that puts barefoot readings (117-162) in the usual 400-700 Ω,
-        // replace once calibrated against a tape-measure or gym body fat figure.
-        const val OHMS_PER_RAW = 4f
-        // Barefoot readings are 117-162 raw; socks gave 2042, so anything above this is poor contact.
-        private const val MAX_RAW = 400
+    data class Frame(val weightKg: Float, val stable: Boolean, val resistance: Int)
 
-        /** Weight in kg, whether it is the final frame, and raw resistance; null if [d] is not a valid frame. */
-        fun parseFrame(d: ByteArray): Triple<Float, Boolean, Int>? {
-            if (d.size != FRAME_LEN) return null
-            val u = { i: Int -> d[i].toInt() and 0xFF }
-            if (u(0) != 0x02 || u(1) != 0x03 || u(2) != 0x11) return null
-            if (((9..15).sumOf(u) and 0xFF) != u(16)) return null
-            return Triple(((u(10) shl 8) or u(11)) / 100f, u(14) == FLAG_FINAL, (u(12) shl 8) or u(13))
+    companion object {
+        const val MANUFACTURER_ID = 0x0100
+        private const val FRAME_LENGTH = 17
+        private const val STABLE = 0xA1
+
+        // Barefoot readings were 117-162; times 4 lands them in the usual 400-700 ohm range.
+        // Not yet checked against a reference body fat measurement.
+        const val OHMS_PER_STEP = 4f
+        // Above this the feet are not touching the electrodes properly (socks gave 2042).
+        private const val MAX_RESISTANCE = 400
+
+        fun parseFrame(data: ByteArray): Frame? {
+            if (data.size != FRAME_LENGTH) return null
+            val b = IntArray(FRAME_LENGTH) { data[it].toInt() and 0xFF }
+            if (b[0] != 0x02 || b[1] != 0x03 || b[2] != 0x11) return null
+
+            var sum = 0
+            for (i in 9..15) sum += b[i]
+            if ((sum and 0xFF) != b[16]) return null
+
+            return Frame(
+                weightKg = ((b[10] shl 8) or b[11]) / 100f,
+                stable = b[14] == STABLE,
+                resistance = (b[12] shl 8) or b[13]
+            )
         }
 
-        /** Impedance in ohms for a usable barefoot reading, or null for no or poor contact. */
-        fun ohms(raw: Int): Float? = if (raw in 1..MAX_RAW) raw * OHMS_PER_RAW else null
+        fun resistanceToOhms(resistance: Int): Float? =
+            if (resistance in 1..MAX_RESISTANCE) resistance * OHMS_PER_STEP else null
     }
 
-    private var hasPublished = false
+    private var published = false
 
     override fun supportFor(device: ScannedDeviceInfo): DeviceSupport? {
-        val data = device.manufacturerData?.get(COMPANY_ID) ?: return null
-        return if (parseFrame(data) != null) deviceSupport else null
-    }
+        val data = device.manufacturerData?.get(MANUFACTURER_ID) ?: return null
+        parseFrame(data) ?: return null
 
-    override fun onConnected(user: ScaleUser) = Unit
-
-    override fun onNotification(characteristic: UUID, data: ByteArray, user: ScaleUser) = Unit
-
-    override fun onDisconnected() {
-        hasPublished = false
+        return DeviceSupport(
+            displayName = "Anko Body Analysis Scale",
+            capabilities = setOf(DeviceCapability.LIVE_WEIGHT_STREAM, DeviceCapability.BODY_COMPOSITION),
+            implemented = setOf(DeviceCapability.LIVE_WEIGHT_STREAM, DeviceCapability.BODY_COMPOSITION),
+            linkMode = LinkMode.BROADCAST_ONLY
+        )
     }
 
     override fun onAdvertisement(result: ScanResult, user: ScaleUser): BroadcastAction {
-        val data = result.scanRecord?.getManufacturerSpecificData(COMPANY_ID)
+        val data = result.scanRecord?.getManufacturerSpecificData(MANUFACTURER_ID)
             ?: return BroadcastAction.IGNORED
-        val (kg, final, raw) = parseFrame(data) ?: return BroadcastAction.IGNORED
-        if (kg <= 0f) return BroadcastAction.IGNORED
+        val frame = parseFrame(data) ?: return BroadcastAction.IGNORED
+        if (frame.weightKg <= 0f) return BroadcastAction.IGNORED
 
-        if (!final) {
-            hasPublished = false // someone is on the scale: a new weigh-in
+        if (!frame.stable) {
+            published = false
             return BroadcastAction.CONSUMED_KEEP_SCANNING
         }
-        // The final frame repeats for ~10 s; store it once.
-        if (hasPublished) return BroadcastAction.CONSUMED_STOP
 
-        LogManager.i(TAG, "final ${"%.2f".format(kg)} kg, resistance raw $raw → publish")
+        // The locked frame keeps repeating for about 10 seconds
+        if (published) return BroadcastAction.CONSUMED_STOP
+
         val measurement = ScaleMeasurement().apply {
             userId = user.id
-            this[MeasurementType.WEIGHT] = Kg(kg)
             dateTime = Date()
+            this[MeasurementType.WEIGHT] = Kg(frame.weightKg)
         }
-        val ohms = ohms(raw)
+
+        val ohms = resistanceToOhms(frame.resistance)
         if (ohms != null && user.bodyHeight > 0f && user.age > 0) {
-            measurement[MeasurementType.IMPEDANCE] = Ohm(ohms)
             val lib = StandardImpedanceLib(
                 gender = user.gender,
                 age = user.age,
-                weightKg = kg.toDouble(),
+                weightKg = frame.weightKg.toDouble(),
                 heightM = user.bodyHeight / 100.0,
-                impedance = ohms.toDouble(),
+                impedance = ohms.toDouble()
             )
+            measurement[MeasurementType.IMPEDANCE] = Ohm(ohms)
             measurement[MeasurementType.BODY_FAT] = Percent(lib.totalFatPercentage.toFloat().coerceIn(0f, 75f))
             measurement[MeasurementType.WATER] = Percent(lib.totalBodyWaterPercentage.toFloat().coerceIn(0f, 80f))
             measurement[MeasurementType.MUSCLE] = Percent(lib.skeletalMusclePercentage.toFloat().coerceIn(0f, 99f))
             measurement[MeasurementType.BONE] = Kg(lib.boneMassKg.toFloat().coerceIn(0f, 10f))
-            measurement[MeasurementType.BMR] = Kcal(lib.basalMetabolicRate.toFloat())
-            measurement[MeasurementType.LBM] = Kg(lib.fatFreeMassKg.toFloat())
         }
+
+        logI("weight ${frame.weightKg} kg, resistance ${frame.resistance}")
         publish(measurement)
-        hasPublished = true
+        published = true
         return BroadcastAction.CONSUMED_STOP
     }
 
-    private val deviceSupport = DeviceSupport(
-        displayName = "Anko Body Analysis Scale",
-        capabilities = setOf(DeviceCapability.LIVE_WEIGHT_STREAM, DeviceCapability.BODY_COMPOSITION),
-        implemented = setOf(DeviceCapability.LIVE_WEIGHT_STREAM, DeviceCapability.BODY_COMPOSITION),
-        linkMode = LinkMode.BROADCAST_ONLY
-    )
+    override fun onDisconnected() {
+        published = false
+    }
 }
