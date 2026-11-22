@@ -9,9 +9,17 @@ class AnkoHandlerTest {
 
     @Test
     fun `final frame gives 48_95 kg`() {
-        val (kg, final) = AnkoHandler.parseFrame(hex("020311 C0FFEE123456 02 131F 0086 A1 07 62"))!!
+        val (kg, final, raw) = AnkoHandler.parseFrame(hex("020311 C0FFEE123456 02 131F 0086 A1 07 62"))!!
         assertThat(kg).isWithin(1e-3f).of(48.95f)
         assertThat(final).isTrue()
+        assertThat(raw).isEqualTo(134)
+    }
+
+    @Test
+    fun `resistance is used barefoot only`() {
+        assertThat(AnkoHandler.ohms(134)).isEqualTo(134 * AnkoHandler.OHMS_PER_RAW)
+        assertThat(AnkoHandler.ohms(0)).isNull()    // shoes
+        assertThat(AnkoHandler.ohms(2042)).isNull() // socks
     }
 
     @Test
