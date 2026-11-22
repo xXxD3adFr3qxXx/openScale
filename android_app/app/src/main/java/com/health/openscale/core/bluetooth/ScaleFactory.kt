@@ -26,6 +26,7 @@ import com.health.openscale.core.bluetooth.scales.AAAxHandler
 import com.health.openscale.core.bluetooth.scales.AfuB1Handler
 import com.health.openscale.core.bluetooth.scales.AiLinkBroadcastHandler
 import com.health.openscale.core.bluetooth.scales.FitTrackDaraHandler
+import com.health.openscale.core.bluetooth.scales.AnkoHandler
 import com.health.openscale.core.bluetooth.scales.ScaleupHandler
 import com.health.openscale.core.bluetooth.scales.ActiveEraBF06Handler
 import com.health.openscale.core.bluetooth.scales.CultSmartScaleProHandler
@@ -212,6 +213,7 @@ class ScaleFactory @Inject constructor(
             CustomOpenScaleHandler(),
             BeurerSanitasHandler(),
             ScaleupHandler(),
+            AnkoHandler(),
             BodyConnectHandler(),
             BodyPod2Handler(),
             WeightGurusA3Handler(),
